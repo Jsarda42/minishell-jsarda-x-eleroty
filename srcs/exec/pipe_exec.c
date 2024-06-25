@@ -6,76 +6,208 @@
 /*   By: jsarda <jsarda@student.42.fr>              +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2024/05/16 13:07:38 by jsarda            #+#    #+#             */
-/*   Updated: 2024/05/16 14:57:48 by jsarda           ###   ########.fr       */
+/*   Updated: 2024/06/20 13:52:44 by jsarda           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "../../includes/minishell.h"
 
-// #Step 6: Handling Pipes
-
-// 1 Create a Pipe: Use the pipe() system call to
-//		create a pipe.
-
-// 2 Redirect Output to the Pipe: In the first child
-//		process, redirect STDOUT to the write end of the pipe.
-
-// 3 Redirect Input from the Pipe: In the second
-//		child process, redirect STDIN to the read end of the pipe.
-
-// 4 Close Unused File Descriptors: Ensure that unused
-//		file descriptors are closed in both the parent and child
-//		processes.
-
-// 5 Execute Commands: Execute the commands in the
-//		respective child processes.
-
-void	exec_pipe(char **cmd1, char **cmd2)
+void	handle_heredoc(t_node *cmd)
 {
-	pid_t	pid1;
-	pid_t	pid2;
-	int		pipefd[2];
-	int		status;
+	int	i;
 
-	if (pipe(pipefd) == -1)
-		perror_handler("pipe");
-	pid1 = fork();
-	if (pid1 < 0)
-		perror_handler("fork");
-	else if (pid1 == 0)
+	i = 0;
+	if (cmd->here_doc)
 	{
-		if (dup2(pipefd[1], STDOUT_FILENO) == -1)
-			perror_handler("dup2");
-		close(pipefd[0]);
-		close(pipefd[1]);
-		if (execve(cmd1[0], cmd1, NULL) == -1)
-			perror_handler("execve");
+		while (cmd->limiter_hd[i])
+		{
+			get_tmp_file(cmd);
+			heredoc(cmd->limiter_hd[i], cmd->heredoc_filename);
+			i++;
+			if (cmd->limiter_hd[i])
+				unlink(cmd->heredoc_filename);
+		}
 	}
-	pid2 = fork();
-	if (pid2 < 0)
-		perror_handler("fork");
-	else if (pid2 == 0)
-	{
-		if (dup2(pipefd[0], STDIN_FILENO) == -1)
-			perror_handler("dup2");
-		close(pipefd[0]);
-		close(pipefd[1]);
-		if (execve(cmd2[0], cmd2, NULL) == -1)
-			perror_handler("execve");
-	}
-	close(pipefd[0]);
-	close(pipefd[1]);
-	if (waitpid(pid1, &status, 0) == -1)
-		perror_handler("waitpid pid1");
-	if (waitpid(pid2, &status, 0) == -1)
-		perror_handler("waitpid pid2");
 }
 
-// int	main(void)
-// {
-// 	char	*cmd1[] = {"/bin/ls", "-l", NULL};
-// 	char	*cmd2[] = {"/usr/bin/wc", "-l", NULL};
+void	handle_builtin(t_node *list, t_minishell *data)
+{
+	if (is_built_in(list) != -1)
+	{
+		if (check_if_redir(list) == 0 || list->here_doc == 1)
+			handle_redir(list);
+		exec_built_in(data, list);
+	}
+}
 
-// 	exec_pipe(cmd1, cmd2);
-// 	return (0);
-// }
+void	exec_mid(t_node *cmd, t_minishell *data, t_node *prev)
+{
+	int		pid;
+	char	**env;
+	char	*path;
+
+	path = NULL;
+	env = NULL;
+	if (pipe(cmd->pipes) == -1)
+	{
+		perror("pipe");
+		exit(EXIT_FAILURE);
+	}
+	handle_heredoc(cmd);
+	pid = fork();
+	if (pid == -1)
+	{
+		perror("fork");
+		exit(EXIT_FAILURE);
+	}
+	if (pid == 0)
+	{
+		if (prev)
+		{
+			dup2(prev->pipes[0], STDIN_FILENO);
+			close(prev->pipes[0]);
+		}
+		if (cmd->next)
+			dup2(cmd->pipes[1], STDOUT_FILENO);
+		if (check_if_redir(cmd) == 0)
+			handle_redir(cmd);
+		close(cmd->pipes[0]);
+		close(cmd->pipes[1]);
+		if (cmd->cmd && is_built_in(cmd) == -1)
+		{
+			env = create_char_env(data->env);
+			path = get_cmd_path(cmd->cmd, data);
+			if (execve(path, cmd->args, env) == -1)
+			{
+				perror("execve");
+				fprintf(stderr, "minishell: %s: command not found\n",
+					cmd->tokens_in_node->cmd);
+				exit(EXIT_FAILURE);
+			}
+		}
+		else if (is_built_in(cmd) != -1)
+			handle_builtin(cmd, data);
+		free_minishell(data, cmd);
+		exit(EXIT_SUCCESS);
+	}
+	close(cmd->pipes[1]);
+	if (prev)
+		close(prev->pipes[0]);
+}
+
+void	exec_first(t_node *cmd, t_minishell *data)
+{
+	int		pid;
+	char	**env;
+	char	*path;
+
+	env = NULL;
+	path = NULL;
+	if (pipe(cmd->pipes) == -1)
+	{
+		perror("pipe");
+		exit(EXIT_FAILURE);
+	}
+	handle_heredoc(cmd);
+	pid = fork();
+	if (pid == -1)
+	{
+		perror("fork");
+		exit(EXIT_FAILURE);
+	}
+	if (pid == 0)
+	{
+		dup2(cmd->pipes[1], STDOUT_FILENO);
+		if (check_if_redir(cmd) == 0)
+			handle_redir(cmd);
+		close(cmd->pipes[0]);
+		close(cmd->pipes[1]);
+		if (cmd->cmd && is_built_in(cmd) == -1)
+		{
+			env = create_char_env(data->env);
+			path = get_cmd_path(cmd->cmd, data);
+			if (execve(path, cmd->args, env) == -1)
+			{
+				perror("execve");
+				fprintf(stderr, "minishell: %s: command not found\n",
+					cmd->tokens_in_node->cmd);
+				exit(EXIT_FAILURE);
+			}
+		}
+		else if (is_built_in(cmd) != -1)
+			handle_builtin(cmd, data);
+		free_minishell(data, cmd);
+		exit(EXIT_SUCCESS);
+	}
+	close(cmd->pipes[1]);
+}
+
+void	exec_last(t_node *cmd, t_minishell *data, t_node *prev)
+{
+	int		pid;
+	char	**env;
+	char	*path;
+
+	env = NULL;
+	path = NULL;
+	handle_heredoc(cmd);
+	pid = fork();
+	if (pid == -1)
+	{
+		perror("fork");
+		exit(EXIT_FAILURE);
+	}
+	if (pid == 0)
+	{
+		if (prev)
+		{
+			dup2(prev->pipes[0], STDIN_FILENO);
+			close(prev->pipes[0]);
+		}
+		if (check_if_redir(cmd) == 0)
+			handle_redir(cmd);
+		if (cmd->cmd && is_built_in(cmd) == -1)
+		{
+			env = create_char_env(data->env);
+			path = get_cmd_path(cmd->cmd, data);
+			if (execve(path, cmd->args, env) == -1)
+			{
+				perror("execve");
+				fprintf(stderr, "minishell: %s: command not found\n",
+					cmd->tokens_in_node->cmd);
+				exit(EXIT_FAILURE);
+			}
+		}
+		else if (is_built_in(cmd) != -1)
+			handle_builtin(cmd, data);
+		free_minishell(data, cmd);
+		exit(EXIT_SUCCESS);
+	}
+	if (prev)
+		close(prev->pipes[0]);
+}
+
+void	exec_pipe(t_node *nodes, t_minishell *data)
+{
+	t_node	*current;
+	t_node	*prev;
+
+	prev = NULL;
+	current = nodes;
+	if (current)
+	{
+		exec_first(current, data);
+		prev = current;
+		current = current->next;
+	}
+	while (current && current->next)
+	{
+		exec_mid(current, data, prev);
+		prev = current;
+		current = current->next;
+	}
+	if (current)
+		exec_last(current, data, prev);
+	while (wait(NULL) > 0)
+		;
+}

@@ -6,145 +6,136 @@
 /*   By: jsarda <jsarda@student.42.fr>              +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2024/05/16 09:18:47 by jsarda            #+#    #+#             */
-/*   Updated: 2024/05/16 13:19:58 by jsarda           ###   ########.fr       */
+/*   Updated: 2024/06/24 16:48:39 by jsarda           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "../../includes/minishell.h"
 
-// #Step 1: Creating a Child Process with fork()
-
-// 1. Call fork() Function: Use the fork() function to create
-//		a new process. It returns a process ID (PID).
-
-// 2. Check the Return Value of fork(): After calling fork(),
-//		you should check its return value to determine
-//		whether the process is the parent or the child.
-
-// 3. Handle Errors: Check if fork() returns -1, indicating
-//		an error. If so, print an error message using
-//		perror() and exit the program.
-
-// #Step 2: Replacing the Process Image with execve()
-
-// 1 . Call execve() Function: In the child process block,
-//		use the execve() function to replace the current process image with a new executable.
-// 3 . Handle Errors: Check if execve() returns -1,
-//		indicating an error. If so,
-//			print an error message using perror() and exit the child process with a failure status.
-
-// #Step 3: Waiting for the Child Process to Finish with waitpid()
-
-// 1 . Call waitpid() Function: In the parent process block,
-//		use the waitpid() function to wait for the child process to finish execution.
-
-// 2 . Handle Errors: Check if waitpid() returns -1,
-//		indicating an error. If so, print an error message
-//		using perror() and exit the parent process with a
-//		failure status.
-
-// #Step 4: Handling possible errors for fork(),
-//		execve(), and waitpid()
-
-// 1 . Error Handling for fork()
-//		If fork() returns -1, an error has occurred. Print
-//		an error message using perror() and exit the
-//		program with EXIT_FAILURE.
-
-// 2 . Error Handling for execve()
-//		If execve() returns -1 in the child process,
-//		it indicates an error. Print an error message
-//		using perror() and exit the child process
-//		with EXIT_FAILURE.
-
-// 3 . Error Handling for waitpid()
-//		If waitpid() returns -1, an error has occurred.
-//		Print an error message using perror() and exit
-//		the parent process with EXIT_FAILURE.
-
-// #Step 5: Handling Redirections
-
-// 1 . Open the File:
-//		Use open() to open the file with the appropriate
-//		flags (O_WRONLY, O_CREAT, O_TRUNC).
-
-// 2 . Redirect Standard Output:
-//		Use dup2() to duplicate the file
-//		descriptor to STDOUT_FILENO.
-
-// 3 . Execute the Command:
-//		Use execve() to execute the command, which will
-//		now write its output to the specified file.
-
-void	handle_redir(char *input_file, char *output_file, int append)
+int	is_built_in(t_node *list)
 {
-	int	fd;
+	int		i;
+	char	*built_in[NUM_OF_BUILT_INS];
 
-	if (input_file)
+	if (!list->cmd)
+		return (-1);
+	built_in[0] = "pwd";
+	built_in[1] = "echo";
+	built_in[2] = "exit";
+	built_in[3] = "cd";
+	built_in[4] = "env";
+	built_in[5] = "unset";
+	built_in[6] = "export";
+	i = 0;
+	while (i < NUM_OF_BUILT_INS)
 	{
-		fd = open(input_file, O_RDONLY);
-		if (fd < 0)
-			perror_handler("open input file");
-		if (dup2(fd, STDIN_FILENO) < 0)
-		{
-			close(fd);
-			perror_handler("dup2 input file");
-		}
-		close(fd);
+		if (ft_strcmp(list->cmd, built_in[i]) == 0)
+			return (i);
+		i++;
 	}
-	if (output_file)
-	{
-		if (append)
-			fd = open(output_file, O_WRONLY | O_CREAT | O_APPEND, 0644);
-		else
-			fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-		if (fd < 0)
-			perror_handler("open output file");
-		if (dup2(fd, STDOUT_FILENO) < 0)
-		{
-			close(fd);
-			perror_handler("dup2 input file");
-		}
-		close(fd);
-	}
+	return (-1);
 }
 
-void	exec_cmd(char *path, char **argv, char *input_file, char *output_file,
-		int append)
+void	exec_built_in(t_minishell *data, t_node *list)
+{
+	int		index;
+	void	(*built_in_funcs[NUM_OF_BUILT_INS])(t_minishell *, t_node *,
+			char **);
+
+	built_in_funcs[0] = &ft_pwd;
+	built_in_funcs[1] = &ft_echo;
+	built_in_funcs[2] = &ft_exit;
+	built_in_funcs[3] = &ft_cd;
+	built_in_funcs[4] = &ft_env;
+	built_in_funcs[5] = &ft_unset;
+	built_in_funcs[6] = &ft_export;
+	index = is_built_in(list);
+	if (index == -1)
+		return ;
+	built_in_funcs[index](data, list, list->args);
+}
+
+int	check_if_redir(t_node *node)
+{
+	t_token	*token;
+
+	token = node->tokens_in_node;
+	while (token)
+	{
+		if (token->type >= 1 && token->type <= 4)
+			return (0);
+		token = token->next;
+	}
+	return (1);
+}
+
+void	exec_child_process(t_minishell *data, t_node *list)
+{
+	t_node	*current;
+	char	**env;
+	char	*path;
+
+	current = list;
+	if (check_if_redir(current) == 0 || list->here_doc == 1)
+	{
+		while (current)
+		{
+			handle_redir(current);
+			current = current->next;
+		}
+	}
+	env = create_char_env(data->env);
+	if (!env)
+	{
+		free_minishell(data, list);
+		exit(EXIT_FAILURE);
+	}
+	if (list->cmd)
+	{
+		path = get_cmd_path(list->cmd, data);
+		if (path == NULL || execve(path, list->args, env) == -1)
+		{
+			perror("execve");
+			fprintf(stderr, "minishell: %s: command not found\n",
+				list->cmd);
+		}
+	}
+	free_minishell(data, list);
+	exit(0);
+}
+
+void	exec_parent_process(pid_t pid)
+{
+	int	status;
+
+	if (waitpid(pid, &status, 0) == -1)
+		perror("waitpid");
+}
+
+void	exec_simple_cmd(t_minishell *data, t_node *list)
 {
 	pid_t	pid;
-	int		status;
+	t_node	*current;
 
+	current = list;
+	if (is_built_in(current) != -1)
+	{
+		if (check_if_redir(current) == 0 || current->here_doc == 1)
+		{
+			while (current)
+			{
+				handle_redir(current);
+				current = current->next;
+			}
+		}
+		exec_built_in(data, list);
+		return ;
+	}
 	pid = fork();
 	if (pid < 0)
-		perror_handler("fork");
+		perror("fork");
 	else if (pid == 0)
-	{
-		handle_redir(input_file, output_file, append);
-		if (execve(path, argv, NULL) == -1)
-			perror_handler("execve");
-	}
+		exec_child_process(data, list);
 	else
-	{
-		if (waitpid(pid, &status, 0) == -1)
-			perror_handler("waitpid");
-		if (WIFEXITED(status))
-			printf("Child exited with status %d\n", WEXITSTATUS(status));
-		else if (WIFSIGNALED(status))
-			printf("Child was killed by signal %d\n", WTERMSIG(status));
-	}
+		exec_parent_process(pid);
 }
-
-// int	main(void)
-// {
-// 	char	*path;
-// 	char	*argv[] = {"cat", "exec_cmd.c", NULL};
-// 	char	*output_file;
-// 	int		append;
-
-// 	char *input_file = "test.txt";
-// 	output_file = NULL;
-// 	append = 0;
-// 	path = "/bin/cat";
-// 	exec_cmd(path, argv, input_file, output_file, append);
-// }
